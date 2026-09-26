@@ -225,10 +225,15 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Setup Haxe
-        uses: krdlab/setup-haxe@v1
-        with:
-          haxe-version: ${{ env.HAXE_VERSION }}
+      - name: Setup Haxe (Homebrew)
+        shell: bash
+        run: |
+          brew update
+          brew install haxe
+          mkdir -p "$HOME/haxelib"
+          haxelib setup "$HOME/haxelib"
+          haxe -version
+          haxelib version
 
       - name: Install HMM
         shell: bash
@@ -494,10 +499,15 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Setup Haxe
-        uses: krdlab/setup-haxe@v1
-        with:
-          haxe-version: ${{ env.HAXE_VERSION }}
+      - name: Setup Haxe (Homebrew)
+        shell: bash
+        run: |
+          brew update
+          brew install haxe
+          mkdir -p "$HOME/haxelib"
+          haxelib setup "$HOME/haxelib"
+          haxe -version
+          haxelib version
 
       - name: Install HMM
         shell: bash
