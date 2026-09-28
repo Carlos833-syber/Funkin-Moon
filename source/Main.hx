@@ -16,9 +16,13 @@ import funkin.util.logging.AnsiTrace;
 import funkin.ui.debug.FunkinDebugDisplay;
 import funkin.ui.debug.FunkinDebugDisplay.DebugDisplayMode;
 import funkin.lowend.FunkinLow;
+import funkin.lowend.FunkinLow.FunkinQualityTier;
 import funkin.ui.system.FunkinCosmic;
 #if FEATURE_MULTIPLAYER
 import funkin.multiplayer.MultiplayerModding;
+#end
+#if FEATURE_NATIVE_CPP
+import funkin.native.MainNative;
 #end
 #if hxvlc
 import hxvlc.util.Handle;
@@ -27,7 +31,6 @@ import openfl.display.Sprite;
 import openfl.events.Event;
 import openfl.events.UncaughtErrorEvent;
 import openfl.events.KeyboardEvent;
-import openfl.ui.Keyboard;
 import openfl.Lib;
 import openfl.utils.Assets;
 import funkin.Paths;
@@ -66,6 +69,7 @@ class Main extends Sprite
   public static var deviceMemoryClass(default, null):DeviceMemoryClass = Unknown;
   public static var lowMemoryEventCount(default, null):Int = 0;
   public static var isAppInForeground(default, null):Bool = true;
+  public static var previousNativeCrash(default, null):Null<String> = null;
 
   private var initialState:Class<FlxState> = funkin.InitState;
   private var zoom:Float = -1;
@@ -104,6 +108,7 @@ class Main extends Sprite
   private static final BACKGROUND_SAVE_DEBOUNCE_MS:Int = 600;
   private static final LOW_MEMORY_DEVICE_THRESHOLD_MB:Int = 1536;
   private static final MID_MEMORY_DEVICE_THRESHOLD_MB:Int = 3072;
+  private static final ANDROID_BACK_KEY_CODE:Int = 0x4000010E;
 
   public static function main():Void
   {
@@ -111,6 +116,12 @@ class Main extends Sprite
     CrashHandler.queryStatus();
 
     setupWorkingDirectory();
+
+    #if FEATURE_NATIVE_CPP
+    MainNative.installCrashHandler();
+
+    if (MainNative.hadNativeCrash()) previousNativeCrash = MainNative.getLastCrashSignalName().toString();
+    #end
 
     Lib.current.addChild(new Main());
   }
@@ -160,41 +171,39 @@ class Main extends Sprite
 
   private function detectDeviceMemoryClass():Void
   {
-    #if mobile
-    try
-    {
-      var totalMemoryMb:Float = 0;
+    var totalMemoryMb:Float = queryTotalMemoryMb();
 
-      #if android
-      totalMemoryMb = extension.androidtools.app.ActivityManager.getMemoryInfo().totalMem / (1024 * 1024);
-      #elseif ios
-      totalMemoryMb = System.totalMemory / (1024 * 1024);
-      #end
-
-      if (totalMemoryMb <= 0)
-      {
-        deviceMemoryClass = Unknown;
-        return;
-      }
-
-      if (totalMemoryMb <= LOW_MEMORY_DEVICE_THRESHOLD_MB)
-      {
-        deviceMemoryClass = Low;
-      }
-      else if (totalMemoryMb <= MID_MEMORY_DEVICE_THRESHOLD_MB)
-      {
-        deviceMemoryClass = Mid;
-      }
-      else
-      {
-        deviceMemoryClass = High;
-      }
-    }
-    catch (e:Dynamic)
+    if (totalMemoryMb <= 0)
     {
       deviceMemoryClass = Unknown;
     }
-    #end
+    else if (totalMemoryMb <= LOW_MEMORY_DEVICE_THRESHOLD_MB)
+    {
+      deviceMemoryClass = Low;
+    }
+    else if (totalMemoryMb <= MID_MEMORY_DEVICE_THRESHOLD_MB)
+    {
+      deviceMemoryClass = Mid;
+    }
+    else
+    {
+      deviceMemoryClass = High;
+    }
+  }
+
+  private static function queryTotalMemoryMb():Float
+  {
+    try
+    {
+      #if android
+      return extension.androidtools.os.DeviceInfo.getTotalMemory() / (1024 * 1024);
+      #elseif FEATURE_NATIVE_CPP
+      return MainNative.getTotalSystemMemoryBytes() / (1024 * 1024);
+      #end
+    }
+    catch (e:Dynamic) {}
+
+    return 0;
   }
 
   private function initializeMods():Void
@@ -370,7 +379,7 @@ class Main extends Sprite
   private function onMobileKeyDown(event:KeyboardEvent):Void
   {
     #if android
-    if (event.keyCode != Keyboard.BACK) return;
+    if (event.keyCode != ANDROID_BACK_KEY_CODE) return;
 
     event.preventDefault();
     handleAndroidBackButton();
@@ -393,14 +402,6 @@ class Main extends Sprite
 
         backButtonLastPressTime = now;
         FlxG.log.add('Press back again to exit.');
-        return;
-      }
-
-      var pauseSubState:Dynamic = Type.resolveClass('funkin.ui.PauseSubState');
-
-      if (FlxG.state != null && FlxG.state.subState == null && pauseSubState != null)
-      {
-        FlxG.state.openSubState(Type.createInstance(pauseSubState, []));
         return;
       }
 
@@ -427,7 +428,11 @@ class Main extends Sprite
 
     try
     {
+      #if FEATURE_NATIVE_CPP
+      var currentBytes:Float = MainNative.getProcessMemoryBytes();
+      #else
       var currentBytes:Float = openfl.system.System.totalMemory;
+      #end
       var currentMb:Float = currentBytes / (1024 * 1024);
 
       if (lastMemoryPollBytes > 0)
@@ -460,11 +465,11 @@ class Main extends Sprite
       FlxG.log.error('Failed to purge memory under pressure: $e');
     }
 
-    if (deviceMemoryClass == Low && (funkin.lowend.FunkinLow.FunkinQualityTier : Int) != 0)
+    if (deviceMemoryClass == Low && FunkinLow.tier != FunkinQualityTier.Potato)
     {
       try
       {
-        FunkinLow.forceTier(funkin.lowend.FunkinLow.FunkinQualityTier.Potato);
+        FunkinLow.forceTier(FunkinQualityTier.Potato);
       }
       catch (e:Dynamic) {}
     }
@@ -516,7 +521,7 @@ class Main extends Sprite
 
     try
     {
-      FunkinSound.pauseAll();
+      FlxG.sound.pause();
     }
     catch (e:Dynamic) {}
     #end
@@ -563,7 +568,7 @@ class Main extends Sprite
       #if mobile
       try
       {
-        FunkinSound.resumeAll();
+        FlxG.sound.resume();
       }
       catch (e:Dynamic) {}
       #end
@@ -790,13 +795,13 @@ class Main extends Sprite
     FunkinLow.init(startInLowMode, true);
   }
 
-  private function onQualityTierChanged(newTier:funkin.lowend.FunkinLow.FunkinQualityTier):Void
+  private function onQualityTierChanged(newTier:FunkinQualityTier):Void
   {
     qualityTierChangeCount++;
 
     FlxG.log.add('Quality tier changed to ${FunkinLow.getTierName()} (change #$qualityTierChangeCount)');
 
-    if ((newTier : Int) >= (funkin.lowend.FunkinLow.FunkinQualityTier.Potato : Int))
+    if ((newTier : Int) >= (FunkinQualityTier.Potato : Int))
     {
       try
       {
@@ -838,9 +843,12 @@ class Main extends Sprite
 
     FlxG.log.add('Startup complete in ${Math.round(totalMs)}ms across ${Lambda.count(stageTimings)} stage(s).');
 
-    #if mobile
     FlxG.log.add('Device memory class: $deviceMemoryClass.');
-    #end
+
+    if (previousNativeCrash != null)
+    {
+      FlxG.log.warn('The previous session ended with a native crash ($previousNativeCrash).');
+    }
 
     if (safeMode)
     {
@@ -1028,7 +1036,9 @@ class Main extends Sprite
 
   private function handleDebugDisplayKeys():Void
   {
-    if (PlayerSettings.player1.controls == null || !PlayerSettings.player1.controls.check(DEBUG_DISPLAY))
+    var player:Null<PlayerSettings> = PlayerSettings.player1;
+
+    if (player == null || player.controls == null || !player.controls.check(DEBUG_DISPLAY))
     {
       return;
     }
